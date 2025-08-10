@@ -1,0 +1,12 @@
+{
+  "name": "gtfsrt-pages",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:rt": "node scripts/fetch-gtfsrt.mjs"
+  },
+  "dependencies": {
+    "gtfs-realtime-bindings": "^1.0.0",
+    "node-fetch": "^3.3.2"
+  }
+}
