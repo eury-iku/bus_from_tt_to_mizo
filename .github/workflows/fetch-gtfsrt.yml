@@ -1,0 +1,37 @@
+name: Fetch GTFS-RT and publish JSON
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"  # 5分ごと（UTC基準）
+
+permissions:
+  contents: write  # JSONをコミットするために必要
+
+jobs:
+  fetch-and-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch GTFS-RT and generate JSON
+        run: npm run build:rt
+        env:
+          GTFSRT_URL: ${{ secrets.GTFSRT_URL }}
+
+      - name: Commit JSON if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update realtime JSON [skip ci]"
+          file_pattern: docs/realtime_tripupdates.json
