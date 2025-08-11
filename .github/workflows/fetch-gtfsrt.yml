@@ -1,37 +1,144 @@
-name: Fetch GTFS-RT and publish JSON
+name: Fetch GTFS-RT and commit JSON
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"  # 5分ごと（UTC基準）
+    - cron: "*/5 * * * *"   # 5分ごと（UTC）
+  workflow_dispatch: {}
 
-permissions:
-  contents: write  # JSONをコミットするために必要
+concurrency:
+  group: gtfsrt
+  cancel-in-progress: true
 
 jobs:
   fetch-and-commit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # どちらかを使う
+      ODPT_KEY: ${{ secrets.ODPT_KEY }}                 # 推奨：キーを渡す
+      GTFSRT_URL: ${{ secrets.GTFSRT_URL }}             # 直接URL（キーを含める場合）
+      # 取得対象（tripUpdate / vehicle / alert）
+      GTFSRT_KIND: tripUpdate
+      # 保存先
+      OUT_FILE: docs/realtime_tripupdates.json
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
+      # ⚠️ cache を付けない（今回のエラー回避）
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: "npm"
+          node-version: "20"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install deps
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm i gtfs-realtime-bindings@^1 node-fetch@^3
+
+      - name: Compose URL
+        id: compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ODPT_KEY:-}" ]]; then
+            BASE="https://api.odpt.org/api/v4/gtfs/realtime/odpt_TransportationBureau_CityOfKawasaki_AllLines_${GTFSRT_KIND}"
+            URL="${BASE}?acl:consumerKey=${ODPT_KEY}"
+          elif [[ -n "${GTFSRT_URL:-}" ]]; then
+            URL="${GTFSRT_URL}"
+          else
+            echo "No ODPT_KEY or GTFSRT_URL." >&2; exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Using: ${URL%%acl:*}acl:consumerKey=***MASKED***"
 
       - name: Fetch GTFS-RT and generate JSON
-        run: npm run build:rt
-        env:
-          GTFSRT_URL: ${{ secrets.GTFSRT_URL }}
+        shell: bash
+        run: |
+          cat > fetch.mjs <<'EOF'
+          import fetch from "node-fetch";
+          import GtfsRealtimeBindings from "gtfs-realtime-bindings";
+          import fs from "node:fs";
 
-      - name: Commit JSON if changed
-        uses: stefanzweifel/git-auto-commit-action@v5
+          const url = process.env.URL;
+          const out = process.env.OUT_FILE || "docs/realtime_tripupdates.json";
+
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+          const buf = Buffer.from(await res.arrayBuffer());
+          const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buf);
+
+          // そのまま全部JSON化（必要なら絞り込み可能）
+          const plain = {
+            fetched_at: new Date().toISOString(),
+            entity: feed.entity.map(e => ({
+              id: e.id,
+              trip_update: e.tripUpdate ? {
+                trip: {
+                  trip_id: e.tripUpdate.trip?.tripId || null,
+                  route_id: e.tripUpdate.trip?.routeId || null,
+                },
+                stop_time_update: (e.tripUpdate.stopTimeUpdate || []).map(s => ({
+                  stop_sequence: s.stopSequence ?? null,
+                  stop_id: s.stopId || null,
+                  arrival:  s.arrival?.time?.toString?.() || null,
+                  departure: s.departure?.time?.toString?.() || null,
+                }))
+              } : null,
+              vehicle: e.vehicle ? {
+                trip: {
+                  trip_id: e.vehicle.trip?.tripId || null,
+                  route_id: e.vehicle.trip?.routeId || null,
+                },
+                position: e.vehicle.position ? {
+                  latitude:  e.vehicle.position.latitude,
+                  longitude: e.vehicle.position.longitude,
+                  bearing:   e.vehicle.position.bearing ?? null,
+                  speed:     e.vehicle.position.speed ?? null,
+                } : null
+              } : null,
+              alert: e.alert ? { informed_entity_count: (e.alert.informedEntity||[]).length } : null
+            }))
+          };
+
+          fs.mkdirSync(new URL('file:' + out).pathname.replace(/\/[^/]+$/, ''), { recursive: true });
+          fs.writeFileSync(out, JSON.stringify(plain));
+          console.log(`wrote ${out} (${(fs.statSync(out).size/1e6).toFixed(2)} MB)`);
+          EOF
+          node fetch.mjs
+        env:
+          URL: ${{ steps.compose.outputs.url }}
+          OUT_FILE: ${{ env.OUT_FILE }}
+
+      - name: Commit JSON (rebase & retry)
+        shell: bash
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A docs || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: update GTFS-RT JSON"
+          for i in 1 2 3; do
+            git fetch origin main
+            if git rebase origin/main; then
+              if git push origin HEAD:main; then
+                echo "Pushed."; exit 0
+              fi
+            else
+              git rebase --abort || true
+            fi
+            sleep 2
+          done
+          echo "Push failed."; exit 1
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          commit_message: "chore: update realtime JSON [skip ci]"
-          file_pattern: docs/realtime_tripupdates.json
+          name: gtfsrt-json
+          path: ${{ env.OUT_FILE }}
