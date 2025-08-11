@@ -39,14 +39,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${ODPT_KEY:-}" ]]; then
-            BASE="https://api.odpt.org/api/v4/gtfs/realtime/odpt_TransportationBureau_CityOfKawasaki_AllLines_${GTFSRT_KIND}"
-            URL="${BASE}?acl:consumerKey=${ODPT_KEY}"
-          elif [[ -n "${GTFSRT_URL:-}" ]]; then
-            URL="${GTFSRT_URL}"
-          else
-            echo "No ODPT_KEY or GTFSRT_URL." >&2; exit 1
-          fi
+          # Secrets から直接URLを取得
+          URL="${{ secrets.GTFSRT_URL }}"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "Using: ${URL%%acl:*}acl:consumerKey=***MASKED***"
 
