@@ -39,38 +39,42 @@ jobs:
         run: |
           set -euo pipefail
           URL=$(cat url.txt)
-          curl -fsSL -D headers.txt -o /dev/null "$URL" || {
+          echo "URL: $URL"
+            # -L で追従し、全ヘッダを書き出す（302→200 両方入る）
+            curl -fsSL -D headers.txt -o /dev/null "$URL" || {
             echo "GET failed. Capturing error body..."
             curl -sS -D headers.txt "$URL" -o error_body.txt || true
             sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' headers.txt || true
             echo "--- error body (masked) ---"
             sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' error_body.txt || true
             exit 1
-          }
+            }
+    
+            echo "--- response headers (masked) ---"
+            sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' headers.txt
+    
+            # 最後の HTTP/... 行を採用（リダイレクト最終）
+            STATUS=$(awk '/^HTTP\//{code=$2} END{print code}' headers.txt)
+            if [[ "$STATUS" != "200" ]]; then
+                echo "Unexpected final HTTP status: $STATUS"; exit 1
+            fi
+            echo "OK: final status $STATUS"
+        
 
-          echo "--- response headers (masked) ---"
-          sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' headers.txt
-
-          STATUS=$(awk 'NR==1{print $2}' headers.txt)
-          CTYPE=$(awk 'tolower($1)=="content-type:"{print tolower($2)}' headers.txt | tr -d '\r')
-
-          if [[ "$STATUS" != "200" ]]; then
-            echo "Unexpected HTTP status: $STATUS"; exit 1
-          fi
-          if [[ "$CTYPE" != application/zip* && "$CTYPE" != application/octet-stream* ]]; then
-            echo "Unexpected Content-Type: $CTYPE"; exit 1
-          fi
-          echo "OK: $STATUS / $CTYPE"
-
-      - name: Download & list ZIP
+      - name: Download & verify ZIP
         shell: bash
         run: |
-          set -euo pipefail
-          URL=$(cat url.txt)
-          curl -fSL --retry 3 --retry-all-errors "$URL" -o gtfs.zip
-          ls -lh gtfs.zip | tee zip_size.txt
-          unzip -l gtfs.zip | head -n 80 | tee zip_manifest.txt
-
+            set -euo pipefail
+            URL=$(cat url.txt)
+            curl -fSL --retry 3 --retry-all-errors "$URL" -o gtfs.zip
+          
+            # ZIPとして破損がないか検査（unzip -t が非0なら壊れている）
+            unzip -t gtfs.zip
+          
+            # 中身ざっと確認
+            ls -lh gtfs.zip | tee zip_size.txt
+            unzip -l gtfs.zip | head -n 80 | tee zip_manifest.txt
+          
       - name: Upload check artifacts
         uses: actions/upload-artifact@v4
         with:
