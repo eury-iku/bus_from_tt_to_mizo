@@ -1,35 +1,82 @@
-- name: Check secret presence
-  shell: bash
-  run: |
-    if [[ -z "${GTFS_STATIC_ZIP_URL:-}" ]]; then
-      echo "GTFS_STATIC_ZIP_URL secret is EMPTY or not available to this workflow."
-      echo "Check: Settings > Secrets and variables > Actions > Repository secrets"
-      exit 1
-    fi
+name: Check GTFS ZIP
 
-- name: GET check (status & content-type)
-  shell: bash
-  run: |
-    set -euo pipefail
-    curl -fsSL -D headers.txt -o /dev/null "$GTFS_STATIC_ZIP_URL" || {
-      echo "GET failed. Capturing error body..."
-      curl -sS -D headers.txt "$GTFS_STATIC_ZIP_URL" -o error_body.txt || true
-      sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' headers.txt || true
-      echo "--- error body (masked) ---"
-      sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' error_body.txt || true
-      exit 1
-    }
+on:
+  workflow_dispatch: {}
 
-    echo "--- response headers (masked) ---"
-    sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' headers.txt
+jobs:
+  check-zip:
+    runs-on: ubuntu-latest
+    env:
+      # どちらか一方の方式を使う
+      GTFS_STATIC_ZIP_URL: ${{ secrets.GTFS_STATIC_ZIP_URL }}
+      # ODPT_KEY: ${{ secrets.ODPT_KEY }}
+      # BASE_URL: https://api.odpt.org/api/v4/files/odpt/TransportationBureau_CityOfKawasaki/AllLines.zip
+      # DATE: "20250730"
+    steps:
+      - uses: actions/checkout@v4
 
-    STATUS=$(awk 'NR==1{print $2}' headers.txt)
-    CTYPE=$(awk 'tolower($1)=="content-type:"{print tolower($2)}' headers.txt | tr -d '\r')
+      - name: Check secret presence
+        shell: bash
+        run: |
+          if [[ -z "${GTFS_STATIC_ZIP_URL:-}" ]]; then
+            echo "GTFS_STATIC_ZIP_URL is empty (or using ODPT_KEY mode)."
+          fi
+          # ODPT_KEY方式を使うなら、ここでURL組み立てる
+          if [[ -n "${ODPT_KEY:-}" ]]; then
+            URL="${BASE_URL}?date=${DATE}&acl:consumerKey=${ODPT_KEY}"
+            echo "URL composed (masked)."
+            echo "URL=${URL}" | sed -E 's/(acl:consumerKey=).+/\1***MASKED***/'
+            echo "URL" > url_source.txt
+            echo "$URL" > url.txt
+          else
+            echo "Using GTFS_STATIC_ZIP_URL secret directly."
+            echo "SECRET" > url_source.txt
+            echo "$GTFS_STATIC_ZIP_URL" > url.txt
+          fi
 
-    if [[ "$STATUS" != "200" ]]; then
-      echo "Unexpected HTTP status: $STATUS"; exit 1
-    fi
-    if [[ "$CTYPE" != application/zip* && "$CTYPE" != application/octet-stream* ]]; then
-      echo "Unexpected Content-Type: $CTYPE"; exit 1
-    fi
-    echo "OK: $STATUS / $CTYPE"
+      - name: GET check (status & content-type)
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL=$(cat url.txt)
+          curl -fsSL -D headers.txt -o /dev/null "$URL" || {
+            echo "GET failed. Capturing error body..."
+            curl -sS -D headers.txt "$URL" -o error_body.txt || true
+            sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' headers.txt || true
+            echo "--- error body (masked) ---"
+            sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' error_body.txt || true
+            exit 1
+          }
+
+          echo "--- response headers (masked) ---"
+          sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' headers.txt
+
+          STATUS=$(awk 'NR==1{print $2}' headers.txt)
+          CTYPE=$(awk 'tolower($1)=="content-type:"{print tolower($2)}' headers.txt | tr -d '\r')
+
+          if [[ "$STATUS" != "200" ]]; then
+            echo "Unexpected HTTP status: $STATUS"; exit 1
+          fi
+          if [[ "$CTYPE" != application/zip* && "$CTYPE" != application/octet-stream* ]]; then
+            echo "Unexpected Content-Type: $CTYPE"; exit 1
+          fi
+          echo "OK: $STATUS / $CTYPE"
+
+      - name: Download & list ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL=$(cat url.txt)
+          curl -fSL --retry 3 --retry-all-errors "$URL" -o gtfs.zip
+          ls -lh gtfs.zip | tee zip_size.txt
+          unzip -l gtfs.zip | head -n 80 | tee zip_manifest.txt
+
+      - name: Upload check artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtfs-zip-check
+          path: |
+            headers.txt
+            zip_size.txt
+            zip_manifest.txt
+            url_source.txt
