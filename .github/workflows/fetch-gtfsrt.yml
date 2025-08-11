@@ -19,7 +19,7 @@ jobs:
       ODPT_KEY: ${{ secrets.ODPT_KEY }}                 # 推奨：キーを渡す
       GTFSRT_URL: ${{ secrets.GTFSRT_URL }}             # 直接URL（キーを含める場合）
       # 取得対象（tripUpdate / vehicle / alert）
-      GTFSRT_KIND: tripUpdate
+      GTFSRT_KIND: vehicle
       # 保存先
       OUT_FILE: docs/realtime_tripupdates.json
 
