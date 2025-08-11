@@ -50,11 +50,26 @@ jobs:
           set -euo pipefail
           URL=$(cat url.txt)
           curl -fSL --retry 3 --retry-all-errors "$URL" -o gtfs.zip
-          unzip -t gtfs.zip   # 破損チェック
-          unzip -o gtfs.zip -d gtfs_txt
-          ls -lh gtfs.zip
-          unzip -l gtfs.zip | head -n 80
-
+      
+          # ZIP破損チェック
+          unzip -t gtfs.zip
+      
+          # フラットに展開（サブフォルダを無視して直下に並べる）
+          rm -rf gtfs_static
+          mkdir -p gtfs_static
+          unzip -jo gtfs.zip -d gtfs_static
+      
+          echo "Extracted files:"
+          ls -l gtfs_static
+      
+          # 必須4種の存在チェック
+          for f in stops.txt routes.txt trips.txt stop_times.txt; do
+            if [[ ! -s "gtfs_static/$f" ]]; then
+              echo "Missing required file: gtfs_static/$f" >&2
+              exit 1
+            fi
+          done
+        
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
