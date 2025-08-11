@@ -73,86 +73,86 @@ jobs:
         run: |
           mkdir -p scripts
           cat > scripts/build-static-gtfs.mjs <<'EOF'
-// ESM converter: split stop_times by route to avoid >100MB
-import fs from "node:fs";
-import path from "node:path";
-import { parse } from "csv-parse/sync";
+          // ESM converter: split stop_times by route to avoid >100MB
+          import fs from "node:fs";
+          import path from "node:path";
+          import { parse } from "csv-parse/sync";
 
-const SRC = "gtfs_static";
-const OUT = "docs";
+          const SRC = "gtfs_static";
+          const OUT = "docs";
 
-const ROUTE_ID_FILTER = (process.env.ROUTE_ID_FILTER || "")
-  .split(",").map(s=>s.trim()).filter(Boolean);
-const USE_ROUTE_FILTER = ROUTE_ID_FILTER.length > 0;
+          const ROUTE_ID_FILTER = (process.env.ROUTE_ID_FILTER || "")
+            .split(",").map(s=>s.trim()).filter(Boolean);
+          const USE_ROUTE_FILTER = ROUTE_ID_FILTER.length > 0;
 
-function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
-function readCsv(name){
-  const file = path.join(SRC, name);
-  if(!fs.existsSync(file)) throw new Error(`Missing ${file}`);
-  const text = fs.readFileSync(file,"utf8");
-  return parse(text,{columns:true,skip_empty_lines:true});
-}
-function writeJson(rel, data){
-  const out = path.join(OUT, rel);
-  ensureDir(path.dirname(out));
-  const json = JSON.stringify(data);
-  fs.writeFileSync(out, json, "utf8");
-  const mb = (Buffer.byteLength(json)/1e6).toFixed(1);
-  console.log(`wrote ${rel} (${mb} MB)`);
-}
+          function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
+          function readCsv(name){
+            const file = path.join(SRC, name);
+            if(!fs.existsSync(file)) throw new Error(`Missing ${file}`);
+            const text = fs.readFileSync(file,"utf8");
+            return parse(text,{columns:true,skip_empty_lines:true});
+          }
+          function writeJson(rel, data){
+            const out = path.join(OUT, rel);
+            ensureDir(path.dirname(out));
+            const json = JSON.stringify(data);
+            fs.writeFileSync(out, json, "utf8");
+            const mb = (Buffer.byteLength(json)/1e6).toFixed(1);
+            console.log(`wrote ${rel} (${mb} MB)`);
+          }
 
-console.log("Reading GTFS CSVs...");
-ensureDir(OUT);
-const stops = readCsv("stops.txt");
-const routesAll = readCsv("routes.txt");
-const tripsAll = readCsv("trips.txt");
-const stopTimesAll = readCsv("stop_times.txt");
+          console.log("Reading GTFS CSVs...");
+          ensureDir(OUT);
+          const stops = readCsv("stops.txt");
+          const routesAll = readCsv("routes.txt");
+          const tripsAll = readCsv("trips.txt");
+          const stopTimesAll = readCsv("stop_times.txt");
 
-let routes = routesAll;
-if (USE_ROUTE_FILTER){
-  const keep = new Set(ROUTE_ID_FILTER);
-  routes = routesAll.filter(r => keep.has(r.route_id));
-  console.log(`Route filter: kept ${routes.length} / ${routesAll.length}`);
-}
+          let routes = routesAll;
+          if (USE_ROUTE_FILTER){
+            const keep = new Set(ROUTE_ID_FILTER);
+            routes = routesAll.filter(r => keep.has(r.route_id));
+            console.log(`Route filter: kept ${routes.length} / ${routesAll.length}`);
+          }
 
-const keepRoute = new Set(routes.map(r=>r.route_id));
-const trips = tripsAll.filter(t => !USE_ROUTE_FILTER || keepRoute.has(t.route_id));
+          const keepRoute = new Set(routes.map(r=>r.route_id));
+          const trips = tripsAll.filter(t => !USE_ROUTE_FILTER || keepRoute.has(t.route_id));
 
-const tripToRoute = new Map();
-for (const t of trips) tripToRoute.set(t.trip_id, t.route_id);
+          const tripToRoute = new Map();
+          for (const t of trips) tripToRoute.set(t.trip_id, t.route_id);
 
-const byRoute = new Map();
-let dropped = 0;
-for (const st of stopTimesAll){
-  const rid = tripToRoute.get(st.trip_id);
-  if (!rid){ dropped++; continue; }
-  if (!byRoute.has(rid)) byRoute.set(rid, []);
-  byRoute.get(rid).push({
-    trip_id: st.trip_id,
-    arrival_time: st.arrival_time,
-    departure_time: st.departure_time,
-    stop_id: st.stop_id,
-    stop_sequence: st.stop_sequence,
-    stop_headsign: st.stop_headsign,
-  });
-}
-if (dropped) console.log(`stop_times rows dropped: ${dropped}`);
+          const byRoute = new Map();
+          let dropped = 0;
+          for (const st of stopTimesAll){
+            const rid = tripToRoute.get(st.trip_id);
+            if (!rid){ dropped++; continue; }
+            if (!byRoute.has(rid)) byRoute.set(rid, []);
+            byRoute.get(rid).push({
+              trip_id: st.trip_id,
+              arrival_time: st.arrival_time,
+              departure_time: st.departure_time,
+              stop_id: st.stop_id,
+              stop_sequence: st.stop_sequence,
+              stop_headsign: st.stop_headsign,
+            });
+          }
+          if (dropped) console.log(`stop_times rows dropped: ${dropped}`);
 
-writeJson("routes.json", routes);
-writeJson("trips.json", trips);
-writeJson("stops.json", stops);
+          writeJson("routes.json", routes);
+          writeJson("trips.json", trips);
+          writeJson("stops.json", stops);
 
-const index = [];
-for (const [route_id, rows] of byRoute.entries()){
-  const rel = `stop_times/by_route/${route_id}.json`;
-  writeJson(rel, rows);
-  index.push({ route_id, file: rel, count: rows.length });
-}
-index.sort((a,b)=>a.route_id.localeCompare(b.route_id));
-writeJson("stop_times/index.json", index);
+          const index = [];
+          for (const [route_id, rows] of byRoute.entries()){
+            const rel = `stop_times/by_route/${route_id}.json`;
+            writeJson(rel, rows);
+            index.push({ route_id, file: rel, count: rows.length });
+          }
+          index.sort((a,b)=>a.route_id.localeCompare(b.route_id));
+          writeJson("stop_times/index.json", index);
 
-console.log("Done.");
-EOF
+          console.log("Done.");
+          EOF
 
       - name: Convert TXT -> JSON (slim build)
         env:
