@@ -1,0 +1,52 @@
+name: Check GTFS ZIP
+
+on:
+  workflow_dispatch: {}   # 手動実行
+
+jobs:
+  check-zip:
+    runs-on: ubuntu-latest
+    env:
+      # URLはSecretsから。ログに生URLを出さないため、echoしません
+      GTFS_STATIC_ZIP_URL: ${{ secrets.GTFS_STATIC_ZIP_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: HEAD check (status & content-type)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HEADERS=$(curl -sI --retry 3 --retry-all-errors "$GTFS_STATIC_ZIP_URL")
+          echo "$HEADERS" | sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/g' | tee headers.txt
+
+          STATUS=$(echo "$HEADERS" | awk 'NR==1{print $2}')
+          if [[ "$STATUS" != "200" ]]; then
+            echo "Unexpected HTTP status: $STATUS"
+            exit 1
+          fi
+
+          CTYPE=$(echo "$HEADERS" | awk 'tolower($1)=="content-type:"{print tolower($2)}' | tr -d '\r')
+          # 一部プロバイダは application/octet-stream のこともある
+          if [[ "$CTYPE" != application/zip* && "$CTYPE" != application/octet-stream* ]]; then
+            echo "Unexpected Content-Type: $CTYPE"
+            exit 1
+          fi
+          echo "OK: $STATUS / $CTYPE"
+
+      - name: Download & list ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fSL --retry 3 --retry-all-errors "$GTFS_STATIC_ZIP_URL" -o gtfs.zip
+          ls -lh gtfs.zip | tee zip_size.txt
+          unzip -l gtfs.zip | head -n 80 | tee zip_manifest.txt
+
+      - name: Upload check artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtfs-zip-check
+          path: |
+            headers.txt
+            zip_size.txt
+            zip_manifest.txt
