@@ -1,6 +1,8 @@
 name: Fetch GTFS-RT and commit JSON
 
 on:
+  # schedule:
+  #   - cron: "*/5 * * * *"   # 5分ごと（UTC）
   workflow_dispatch: {}
 
 concurrency:
