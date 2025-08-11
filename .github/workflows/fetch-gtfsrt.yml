@@ -15,15 +15,12 @@ jobs:
     permissions:
       contents: write
     env:
-      # どちらかを使う
       GTFSRT_URL: ${{ secrets.GTFSRT_URL }} 
-      # 保存先
       OUT_FILE: docs/realtime_tripupdates.json
 
     steps:
       - uses: actions/checkout@v4
 
-      # ⚠️ cache を付けない（今回のエラー回避）
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -39,7 +36,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Secrets から直接URLを取得
           URL="${{ secrets.GTFSRT_URL }}"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "Using: ${URL%%acl:*}acl:consumerKey=***MASKED***"
@@ -51,6 +47,7 @@ jobs:
           import fetch from "node-fetch";
           import GtfsRealtimeBindings from "gtfs-realtime-bindings";
           import fs from "node:fs";
+          import path from "node:path";   // ← 追加
 
           const url = process.env.URL;
           const out = process.env.OUT_FILE || "docs/realtime_tripupdates.json";
@@ -60,7 +57,6 @@ jobs:
           const buf = Buffer.from(await res.arrayBuffer());
           const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buf);
 
-          // そのまま全部JSON化（必要なら絞り込み可能）
           const plain = {
             fetched_at: new Date().toISOString(),
             entity: feed.entity.map(e => ({
@@ -93,14 +89,19 @@ jobs:
             }))
           };
 
-          fs.mkdirSync(new URL('file:' + out).pathname.replace(/\/[^/]+$/, ''), { recursive: true });
+          // ✅ 相対パスのままリポジトリ内 docs を作成（既存でもOK）
+          const dir = path.dirname(out);
+          if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+          }
+
           fs.writeFileSync(out, JSON.stringify(plain));
           console.log(`wrote ${out} (${(fs.statSync(out).size/1e6).toFixed(2)} MB)`);
           EOF
           node fetch.mjs
         env:
           URL: ${{ steps.compose.outputs.url }}
-          OUT_FILE: ${{ env.OUT_FILE }}
+          OUT_FILE: ${{ env.OUT_FILE }}  
 
       - name: Commit JSON (rebase & retry)
         shell: bash
