@@ -1,56 +1,97 @@
-name: Build slim static GTFS (route-filtered)
+# .github/workflows/static-gtfs.yml
+name: Build static GTFS
 
 on:
-  workflow_dispatch:
-    inputs:
-      route_ids:
-        description: "route_idをカンマ区切りで（例: 1001,1002）"
-        required: false
-      route_short_regex:
-        description: "route_short_nameの正規表現（例: ^(溝口|たいら)$）"
-        required: false
   schedule:
-    - cron: "0 18 * * *"  # 毎日(UTC18:00)。必要に応じて変更
+    - cron: "10 18 * * *"   # UTC。JST 03:10 相当
+  workflow_dispatch: {}
 
-permissions:
-  contents: write
+concurrency:
+  group: static-gtfs
+  cancel-in-progress: false
 
 jobs:
-  build-slim-gtfs:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # ① 丸ごとURLをSecretに入れている場合（推奨その1）
+      GTFS_STATIC_ZIP_URL: ${{ secrets.GTFS_STATIC_ZIP_URL }}
+      # 必要路線だけに絞るならカンマ区切りで（例: "41102,41103"）
+      ROUTE_ID_FILTER: ""
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compose URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ODPT_KEY:-}" ]]; then
+            if [[ -n "${DATE:-}" ]]; then
+              URL="${BASE_URL}?date=${DATE}&acl:consumerKey=${ODPT_KEY}"
+            else
+              URL="${BASE_URL}?acl:consumerKey=${ODPT_KEY}"
+            fi
+            echo "$URL" > url.txt
+            echo "Use: BASE_URL + ODPT_KEY (masked)"
+          elif [[ -n "${GTFS_STATIC_ZIP_URL:-}" ]]; then
+            echo "$GTFS_STATIC_ZIP_URL" > url.txt
+            echo "Use: GTFS_STATIC_ZIP_URL secret"
+          else
+            echo "No URL/KEY provided. Set either GTFS_STATIC_ZIP_URL or ODPT_KEY." >&2
+            exit 1
+          fi
+          sed -E 's/(acl:consumerKey=)[^& ]+/\1***MASKED***/' url.txt
+
+      - name: Download ZIP (follow redirects) & verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL=$(cat url.txt)
+          curl -fSL --retry 3 --retry-all-errors "$URL" -o gtfs.zip
+          unzip -t gtfs.zip   # 破損チェック
+          unzip -o gtfs.zip -d gtfs_txt
+          ls -lh gtfs.zip
+          unzip -l gtfs.zip | head -n 80
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
 
-      - name: Install deps
-        run: npm i csv-parse@^5
+      - name: Install deps for converter
+        run: npm i csv-parse@5.x
 
-      - name: Download GTFS static zip
-        run: |
-          curl -L "$GTFS_STATIC_ZIP_URL" -o gtfs.zip
-          rm -rf gtfs_static && mkdir gtfs_static
-          unzip -o gtfs.zip -d gtfs_static
+      - name: Convert TXT -> JSON (slim build)
         env:
-          GTFS_STATIC_ZIP_URL: ${{ secrets.GTFS_STATIC_ZIP_URL }}
-
-      - name: Build slim JSONs
+          ROUTE_ID_FILTER: ${{ env.ROUTE_ID_FILTER }}
         run: |
           node scripts/build-static-gtfs.mjs
-        env:
-          # フィルタ条件（どちらか/両方使えます）
-          ROUTE_ID_LIST: ${{ github.event.inputs.route_ids }}
-          ROUTE_SHORT_NAME_REGEX: ${{ github.event.inputs.route_short_regex }}
 
-          # 起点・終点（必要なければ空のままでもOK）
-          ORIGIN_STOP_ID: "260_1"
-          DEST_STOP_ID: "434_5"
+      - name: Commit docs/*
+        shell: bash
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/*.json || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update static GTFS JSON"
+            git push
+          fi
 
-      - name: Commit slim JSONs
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Upload build artifacts (manifest)
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          commit_message: "chore: slim static GTFS (route filtered)"
-          file_pattern: docs/stops.json docs/trips.json docs/stop_times.json docs/routes.json
+          name: static-gtfs-build
+          path: |
+            gtfs.zip
+            gtfs_txt/stops.txt
+            gtfs_txt/routes.txt
+            gtfs_txt/trips.txt
+            gtfs_txt/stop_times.txt
+            docs/*.json
