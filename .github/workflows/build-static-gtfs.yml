@@ -163,17 +163,39 @@ jobs:
         shell: bash
         run: |
           set -e
+      
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # ▼ 再帰的に追加（サブディレクトリ含む）
-          git add -A docs
+      
+          # 変更がなければ終了
+          git add -A docs || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
-          else
-            git commit -m "chore: update static GTFS JSON"
-            git push
+            exit 0
           fi
-
+      
+          git commit -m "chore: update static GTFS JSON"
+      
+          # 競合回避：最新mainへrebaseしてからpush（最大3回リトライ）
+          for i in 1 2 3; do
+            echo "Attempt $i: rebase & push"
+            git fetch origin main
+            # rebase失敗時はabortしてリトライ
+            if git rebase origin/main; then
+              if git push origin HEAD:main; then
+                echo "Pushed successfully."
+                exit 0
+              fi
+            else
+              git rebase --abort || true
+            fi
+            echo "Retrying..."
+            sleep 2
+          done
+      
+          echo "Failed to push after retries."
+          exit 1
+      
       - name: Upload build artifacts (manifest)
         if: always()
         uses: actions/upload-artifact@v4
