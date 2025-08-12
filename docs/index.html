@@ -227,13 +227,7 @@
             routes: "routes.json"       // [{route_id,route_short_name,route_long_name}]
         };
         // B. もしCSVのまま置く場合（簡易CSVパーサを後段に用意）
-        const STATIC_CSV = {
-            enabled: false,
-            stops: "stops.txt",
-            trips: "trips.txt",
-            stopTimes: "stop_times.txt",
-            routes: "routes.txt"
-        };
+        const STATIC_CSV = { enabled: false, stops: "stops.txt", trips: "trips.txt", routes: "routes.txt" };
 
         // GTFS-RT（JSON化された TripUpdate feed を想定）
         // 例：自作の小さなプロキシで protobuf -> JSON にして公開
@@ -243,7 +237,7 @@
 
         const STOP_TIMES_BY_ROUTE_DIR = "stop_times/by_route/";
         const STOP_TIMES_FILE_MIN = 10000;
-        const STOP_TIMES_FILE_MAX = 10099;
+        const STOP_TIMES_FILE_MAX = 10054;
 
         // stop_idの表記ゆれがある場合のエイリアス
         /** @type {Record<string,string[]>} */
@@ -800,11 +794,7 @@
         }
 
         // 初期表示 & ボタン/タイマー
-        document.getElementById("refreshBtn").addEventListener("click", loadAndRender);
-        loadAndRender();
-        setInterval(loadAndRender, 60_000);
-
-        // 初期表示：まずデータを取りに行き、その後はUIだけ1分ごと更新
+// 初期表示：まずデータを取りに行き、その後はUIだけ1分ごと更新
         await refreshData();            // 起動時に一度データ取得＆描画
         alignToMinute(renderFromCache); // 以後は毎分UIだけ更新
         setInterval(refreshData, RT_REFRESH_MS); // 5分ごとにデータ再取得
