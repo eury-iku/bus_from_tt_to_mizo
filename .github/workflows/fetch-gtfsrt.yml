@@ -1,8 +1,10 @@
+# fetch-gtfsrt.yml（差分込みの置き換え例）
+
 name: Fetch GTFS-RT and commit JSON
 
 on:
   # schedule:
-  #   - cron: "*/5 * * * *"   # 5分ごと（UTC）
+  #   - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -15,7 +17,7 @@ jobs:
     permissions:
       contents: write
     env:
-      GTFSRT_URL: ${{ secrets.GTFSRT_URL }} 
+      GTFSRT_URL: ${{ secrets.GTFSRT_URL }}
       OUT_FILE: docs/realtime_tripupdates.json
 
     steps:
@@ -26,10 +28,11 @@ jobs:
         with:
           node-version: "20"
 
+      # ▼ 作業ツリーを汚さないインストール方法に変更
       - name: Install deps
         run: |
-          npm init -y >/dev/null 2>&1
-          npm i gtfs-realtime-bindings@^1 node-fetch@^3
+          npm i --no-save --no-audit --no-fund --no-package-lock \
+            gtfs-realtime-bindings@^1 node-fetch@^3
 
       - name: Compose URL
         id: compose
@@ -47,7 +50,7 @@ jobs:
           import fetch from "node-fetch";
           import GtfsRealtimeBindings from "gtfs-realtime-bindings";
           import fs from "node:fs";
-          import path from "node:path";   // ← 追加
+          import path from "node:path";
 
           const url = process.env.URL;
           const out = process.env.OUT_FILE || "docs/realtime_tripupdates.json";
@@ -89,19 +92,15 @@ jobs:
             }))
           };
 
-          // ✅ 相対パスのままリポジトリ内 docs を作成（既存でもOK）
           const dir = path.dirname(out);
-          if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-          }
-
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(out, JSON.stringify(plain));
           console.log(`wrote ${out} (${(fs.statSync(out).size/1e6).toFixed(2)} MB)`);
           EOF
           node fetch.mjs
         env:
           URL: ${{ steps.compose.outputs.url }}
-          OUT_FILE: ${{ env.OUT_FILE }}  
+          OUT_FILE: ${{ env.OUT_FILE }}
 
       - name: Commit JSON (rebase & retry)
         shell: bash
@@ -109,12 +108,18 @@ jobs:
           set -e
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git add -A docs || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
           git commit -m "chore: update GTFS-RT JSON"
+
+          # ▼ rebase 前に作業ツリーを完全クリーン化（未追跡・生成物も除去）
+          git reset --hard
+          git clean -fdx
+
           for i in 1 2 3; do
             git fetch origin main
             if git rebase origin/main; then
@@ -134,3 +139,4 @@ jobs:
         with:
           name: gtfsrt-json
           path: ${{ env.OUT_FILE }}
+          
