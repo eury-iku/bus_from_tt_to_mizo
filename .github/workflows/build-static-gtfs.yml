@@ -65,6 +65,14 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Build static JSON (core tables + split stop_times)
+        run: |
+        node scripts/make-static-json.mjs --zip gtfs.zip
+
+      - name: Build calendar JSON
+        run: |
+        node scripts/make-calendars.mjs --zip gtfs.zip
+
       - name: Install deps for converter
         run: npm i csv-parse@5.x
 
