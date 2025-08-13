@@ -830,21 +830,6 @@
                 `;
             }).join("");
 
-          <div class="train-box ${compactClass}">
-            <div class="train-info">
-              <div class="train-left">
-                <img src="${iconSrc}" alt="Bus Status" class="train-icon" onerror="this.style.display='none'">
-                <span class="departure-time ${compactClass}">${train.time}</span>
-                <span class="train-type-dest ${compactClass}">${train.type} ${train.destination}</span>
-              </div>
-              <div class="time-remaining ${timeClass}">
-                あと${train.remainingMinutes}分
-              </div>
-            </div>
-          </div>
-        `;
-            }).join("");
-
             root.innerHTML = html;
         }
 
