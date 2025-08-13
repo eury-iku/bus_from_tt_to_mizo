@@ -1,10 +1,8 @@
-# fetch-gtfsrt.yml（差分込みの置き換え例）
-
 name: Fetch GTFS-RT and commit JSON
 
 on:
   # schedule:
-  #   - cron: "*/5 * * * *"
+  #   - cron: "*/5 * * * *"   # 5分ごと（UTC）←必要に応じて有効化
   workflow_dispatch: {}
 
 concurrency:
@@ -17,121 +15,132 @@ jobs:
     permissions:
       contents: write
     env:
+      # 必須：ODPTのGTFS-RTエンドポイント（TripUpdate推奨）をSecretsに設定
       GTFSRT_URL: ${{ secrets.GTFSRT_URL }}
+      # 出力先（GitHub Pages公開用）
       OUT_FILE: docs/realtime_tripupdates.json
+      # ETag を保存する場所（リポジトリにコミットして永続化）
+      ETAG_FILE: docs/.rt_etag
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
-      # ▼ 作業ツリーを汚さないインストール方法に変更
-      - name: Install deps
+      - name: Prepare workdir
         run: |
-          npm i --no-save --no-audit --no-fund --no-package-lock \
-            gtfs-realtime-bindings@^1 node-fetch@^3
+          mkdir -p .cache
+          mkdir -p docs
 
-      - name: Compose URL
-        id: compose
-        shell: bash
+      # ──────────────────────────────────────────────────────────────
+      # 条件付きGET：ETag ベース（304なら以降をスキップ）
+      # ──────────────────────────────────────────────────────────────
+      - name: Conditional GET (ETag)
+        id: fetch_rt
         run: |
-          set -euo pipefail
-          URL="${{ secrets.GTFSRT_URL }}"
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "Using: ${URL%%acl:*}acl:consumerKey=***MASKED***"
+          PREV_ETAG="$(test -f "${ETAG_FILE}" && cat "${ETAG_FILE}" || true)"
+          echo "Prev ETag: ${PREV_ETAG}"
 
-      - name: Fetch GTFS-RT and generate JSON
-        shell: bash
+          HTTP_CODE=$(curl -sSL --compressed \
+            -H "If-None-Match: ${PREV_ETAG}" \
+            -D .cache/rt.headers -o .cache/rt.raw \
+            -w "%{http_code}" "${GTFSRT_URL}")
+
+          echo "http_code=${HTTP_CODE}" >> $GITHUB_OUTPUT
+          echo "HTTP ${HTTP_CODE}"
+
+          NEW_ETAG=$(grep -i '^etag:' .cache/rt.headers | sed -E 's/^[Ee][Tt][Aa][Gg]: *//' | tr -d '\r')
+          echo "New ETag: ${NEW_ETAG}"
+          echo "new_etag=${NEW_ETAG}" >> $GITHUB_OUTPUT
+
+      # ──────────────────────────────────────────────────────────────
+      # 200 OK のときだけ: protobuf → JSON 変換
+      # （gtfs-realtime-bindings をその場でインストール）
+      # ──────────────────────────────────────────────────────────────
+      - name: Install decoder
+        if: steps.fetch_rt.outputs.http_code == '200'
         run: |
-          cat > fetch.mjs <<'EOF'
-          import fetch from "node-fetch";
-          import GtfsRealtimeBindings from "gtfs-realtime-bindings";
-          import fs from "node:fs";
-          import path from "node:path";
+          npm init -y >/dev/null 2>&1 || true
+          npm i --no-audit --no-fund gtfs-realtime-bindings@^1
 
-          const url = process.env.URL;
-          const out = process.env.OUT_FILE || "docs/realtime_tripupdates.json";
+      - name: Convert PB to JSON
+        if: steps.fetch_rt.outputs.http_code == '200'
+        run: |
+          node -e "import fs from 'node:fs'; \
+            import * as G from 'gtfs-realtime-bindings'; \
+            const buf = fs.readFileSync('.cache/rt.raw'); \
+            const feed = G.transit_realtime.FeedMessage.decode(buf); \
+            const json = { entity: feed.entity.map(e => ({ \
+              id: String(e.id||''), \
+              trip_update: e.tripUpdate ? (function(tu){ \
+                const toNum=(v)=>v==null?undefined:Number(v); \
+                const stu=(tu.stopTimeUpdate||[]).map(u=>({ \
+                  stop_id: u.stopId, \
+                  stop_sequence: toNum(u.stopSequence), \
+                  arrival: u.arrival?{time:toNum(u.arrival.time),delay:toNum(u.arrival.delay)}:undefined, \
+                  departure: u.departure?{time:toNum(u.departure.time),delay:toNum(u.departure.delay)}:undefined, \
+                  schedule_relationship: u.scheduleRelationship \
+                })); \
+                return { \
+                  trip:{ \
+                    trip_id: tu.trip?.tripId, \
+                    route_id: tu.trip?.routeId, \
+                    direction_id: tu.trip?.directionId, \
+                    start_date: tu.trip?.startDate \
+                  }, \
+                  stop_time_update: stu, \
+                  schedule_relationship: tu.scheduleRelationship, \
+                  timestamp: toNum(tu.timestamp) \
+                }; \
+              })(e.tripUpdate):undefined \
+            }))}; \
+            fs.writeFileSync('.cache/realtime.json', JSON.stringify(json));"
 
-          const res = await fetch(url);
-          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-          const buf = Buffer.from(await res.arrayBuffer());
-          const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buf);
-
-          const plain = {
-            fetched_at: new Date().toISOString(),
-            entity: feed.entity.map(e => ({
-              id: e.id,
-              trip_update: e.tripUpdate ? {
-                trip: {
-                  trip_id: e.tripUpdate.trip?.tripId || null,
-                  route_id: e.tripUpdate.trip?.routeId || null,
-                },
-                stop_time_update: (e.tripUpdate.stopTimeUpdate || []).map(s => ({
-                  stop_sequence: s.stopSequence ?? null,
-                  stop_id: s.stopId || null,
-                  arrival:  s.arrival?.time?.toString?.() || null,
-                  departure: s.departure?.time?.toString?.() || null,
-                }))
-              } : null,
-              vehicle: e.vehicle ? {
-                trip: {
-                  trip_id: e.vehicle.trip?.tripId || null,
-                  route_id: e.vehicle.trip?.routeId || null,
-                },
-                position: e.vehicle.position ? {
-                  latitude:  e.vehicle.position.latitude,
-                  longitude: e.vehicle.position.longitude,
-                  bearing:   e.vehicle.position.bearing ?? null,
-                  speed:     e.vehicle.position.speed ?? null,
-                } : null
-              } : null,
-              alert: e.alert ? { informed_entity_count: (e.alert.informedEntity||[]).length } : null
-            }))
-          };
-
-          const dir = path.dirname(out);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(out, JSON.stringify(plain));
-          console.log(`wrote ${out} (${(fs.statSync(out).size/1e6).toFixed(2)} MB)`);
-          EOF
-          node fetch.mjs
-        env:
-          URL: ${{ steps.compose.outputs.url }}
-          OUT_FILE: ${{ env.OUT_FILE }}
-
-      - name: Commit JSON (rebase & retry)
-        shell: bash
+      # ──────────────────────────────────────────────────────────────
+      # 中身が変わらなければコミットしない
+      # （変わった場合のみ JSON と ETag をコミット）
+      # ──────────────────────────────────────────────────────────────
+      - name: Commit if changed
+        if: steps.fetch_rt.outputs.http_code == '200'
         run: |
           set -e
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add -A docs || true
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
+          if [ -f "${OUT_FILE}" ] && cmp -s ".cache/realtime.json" "${OUT_FILE}"; then
+            echo "No content change. Skip commit."
             exit 0
           fi
-          git commit -m "chore: update GTFS-RT JSON"
 
-          # ▼ rebase 前に作業ツリーを完全クリーン化（未追跡・生成物も除去）
-          git reset --hard
-          git clean -fdx
+          mv .cache/realtime.json "${OUT_FILE}"
+          # ETag を更新（存在しない場合は空でもOK）
+          printf "%s" "${{ steps.fetch_rt.outputs.new_etag }}" > "${ETAG_FILE}"
 
-          for i in 1 2 3; do
-            git fetch origin main
-            if git rebase origin/main; then
-              if git push origin HEAD:main; then
-                echo "Pushed."; exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 競合に強い push（最大5回リトライ）
+          for i in 1 2 3 4 5; do
+            git add "${OUT_FILE}" "${ETAG_FILE}"
+            if git commit -m "chore: update GTFS-RT JSON ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"; then
+              if git pull --rebase --autostash; then
+                if git push; then
+                  echo "Pushed."
+                  exit 0
+                fi
+              else
+                git rebase --abort || true
               fi
             else
-              git rebase --abort || true
+              echo "Nothing to commit."
+              exit 0
             fi
             sleep 2
           done
-          echo "Push failed."; exit 1
+          echo "Push failed."
+          exit 1
 
       - name: Upload artifact
         if: always()
@@ -139,4 +148,3 @@ jobs:
         with:
           name: gtfsrt-json
           path: ${{ env.OUT_FILE }}
-          
