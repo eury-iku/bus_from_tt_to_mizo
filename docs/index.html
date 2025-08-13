@@ -294,10 +294,10 @@
         }
         async function computeActiveTripIdsFromCalendar(trips){
           // calendar.json / calendar_dates.json が無い場合は null 返してフィルタ省略
-          const calP = fetch('calendar.json',{cache:'no-store'}).then(r=>r.ok?r.json():[]).catch(()=>[]);
-          const datesP = fetch('calendar_dates.json',{cache:'no-store'}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+          const calP = fetch('calendar.json',{cache:'no-store'}).then(r=>r.ok ? r.json() : null).catch(()=>null);
+          const datesP = fetch('calendar_dates.json',{cache:'no-store'}).then(r=>r.ok ? r.json() : null).catch(()=>null);
           const [calendar, calendar_dates] = await Promise.all([calP, datesP]);
-          if (!Array.isArray(calendar) || !Array.isArray(calendar_dates)) return null;
+          if (!calendar || !calendar_dates) return null;
 
           const ymd = todayYmdJst();
           const wk  = weekdayKeyJst();
@@ -830,6 +830,21 @@
                 `;
             }).join("");
 
+          <div class="train-box ${compactClass}">
+            <div class="train-info">
+              <div class="train-left">
+                <img src="${iconSrc}" alt="Bus Status" class="train-icon" onerror="this.style.display='none'">
+                <span class="departure-time ${compactClass}">${train.time}</span>
+                <span class="train-type-dest ${compactClass}">${train.type} ${train.destination}</span>
+              </div>
+              <div class="time-remaining ${timeClass}">
+                あと${train.remainingMinutes}分
+              </div>
+            </div>
+          </div>
+        `;
+            }).join("");
+
             root.innerHTML = html;
         }
 
@@ -866,6 +881,14 @@
         // 更新ボタンは「即時データ再取得」に割り当て
         document.getElementById("refreshBtn").addEventListener("click", () => {
             refreshData().catch(() => {/* 失敗時は前回キャッシュで継続 */ });
+
+        // タブに戻ってきたら即再取得（復帰即更新）
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                refreshData().catch(() => {/* 前回キャッシュで継続 */});
+            }
+        });
+
         });
 
     </script>
