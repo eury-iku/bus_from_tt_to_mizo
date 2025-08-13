@@ -129,7 +129,19 @@
       return activeTrips;
     }
 
-    async function ensureStaticIndex() {
+    
+    async function loadRealtime() {
+      try {
+        const res = await fetch(REALTIME_FEED_URL, { cache: "no-store" });
+        if (!res.ok) return undefined;
+        const raw = await res.json();
+        return adaptRtSnakeToCamel(raw);
+      } catch {
+        return undefined;
+      }
+    }
+
+async function ensureStaticIndex() {
       if (staticIndex) return;
       const { stops, trips, routes } = await loadStaticGtfsBase();
       const tripsById = new Map(trips.map(t => [t.trip_id, t]));
