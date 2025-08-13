@@ -190,6 +190,13 @@
             font-weight: bold;
             text-shadow: 0 0 3px rgba(211, 47, 47, .3);
         }
+
+        .delay-badge{
+            margin-left:.5em;
+            font-size:.9em;
+            color:#d32f2f;
+            font-weight:700;
+        }
     </style>
 </head>
 
@@ -774,23 +781,29 @@
             const enriched = legs.map(l => {
                 const depSecs = l.live_departure ?? l.sched_departure;
                 const depDate = toDateTodayFromSecs(depSecs);
+                const now = new Date();
                 if (depDate < now) depDate.setDate(depDate.getDate() + 1); // 0時跨ぎ対策
                 const diffMin = Math.floor((depDate - now) / 60000);
+
+                // ★遅延分を計算（RTの delay があれば優先、なければ live-sched から算出）
+                const delayMin = typeof l.delay_departure_sec === "number"
+                    ? Math.max(0, Math.round(l.delay_departure_sec / 60))
+                    : (typeof l.live_departure === "number"
+                        ? Math.max(0, Math.round((l.live_departure - l.sched_departure) / 60))
+                        : 0);
+
                 return {
                     time: toHHMM(depSecs),
                     type: (l.route_label || "バス"),
                     destination: l.headsign || "",
                     remainingMinutes: diffMin,
-                    departureTime: depDate
+                    departureTime: depDate,
+                    delayMin
                 };
-            }).filter(r => r.remainingMinutes >= -5 && r.remainingMinutes <= 240)
-                .sort((a, b) => a.departureTime - b.departureTime)
-                .slice(0, MAX_ROWS);
-
-            if (!enriched.length) {
-                root.innerHTML = `<div class="loading">本日以降の便が見つかりません。</div>`;
-                return;
-            }
+            })
+            .filter(r => r.remainingMinutes >= -5 && r.remainingMinutes <= 240)
+            .sort((a, b) => a.departureTime - b.departureTime)
+            .slice(0, MAX_ROWS);
 
             const html = enriched.map(train => {
                 const isCompact = train.remainingMinutes < 10;
@@ -798,9 +811,25 @@
                 const compactClass = isCompact ? 'compact' : '';
                 const timeClass =
                     train.remainingMinutes < 10 ? 'soon' :
-                        (train.remainingMinutes < 20 ? 'normal' : 'later');
+                    (train.remainingMinutes < 20 ? 'normal' : 'later');
 
                 return `
+                    <div class="train-box ${compactClass}">
+                    <div class="train-info">
+                        <div class="train-left">
+                        <img src="${iconSrc}" alt="Bus Status" class="train-icon" onerror="this.style.display='none'">
+                        <span class="departure-time ${compactClass}">${train.time}</span>
+                        ${train.delayMin > 0 ? `<span class="delay-badge">[遅延${train.delayMin}分]</span>` : ""}
+                        <span class="train-type-dest ${compactClass}">${train.type} ${train.destination}</span>
+                        </div>
+                        <div class="time-remaining ${timeClass}">
+                        あと${train.remainingMinutes}分
+                        </div>
+                    </div>
+                    </div>
+                `;
+            }).join("");
+
           <div class="train-box ${compactClass}">
             <div class="train-info">
               <div class="train-left">
